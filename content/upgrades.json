@@ -1,0 +1,38 @@
+[
+  {
+    "id": "click_power",
+    "name": "Click Power",
+    "category": "manual",
+    "baseCost": 25,
+    "costMultiplier": 1.4,
+    "maxLevel": 10,
+    "effectPerLevel": 2
+  },
+  {
+    "id": "auto_miner",
+    "name": "Auto Miner",
+    "category": "auto",
+    "baseCost": 50,
+    "costMultiplier": 1.5,
+    "maxLevel": 8,
+    "effectPerLevel": 1.5
+  },
+  {
+    "id": "supply_gen",
+    "name": "Supply Generator",
+    "category": "supply",
+    "baseCost": 40,
+    "costMultiplier": 1.45,
+    "maxLevel": 6,
+    "effectPerLevel": 0.08
+  },
+  {
+    "id": "bank_shield",
+    "name": "Bank Shield",
+    "category": "banking",
+    "baseCost": 80,
+    "costMultiplier": 1.6,
+    "maxLevel": 4,
+    "effectPerLevel": 0.1
+  }
+]

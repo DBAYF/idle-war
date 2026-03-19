@@ -39,6 +39,11 @@ export const audioService = {
     playTone(1320, 0.08, 'sine', 0.06);
   },
 
+  playCooldownTick: () => {
+    if (!audioEnabled) return;
+    playTone(440, 0.03, 'sine', 0.04);
+  },
+
   playUpgrade: () => {
     if (!audioEnabled) return;
     playTone(523, 0.06, 'sine', 0.1);

@@ -21,6 +21,7 @@ export function TutorialModal({ onClose }: TutorialModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <h2>HOW TO PLAY</h2>
+        <p className="tutorial-intro">Rival factions battle for secured wealth. Click, bank, upgrade, and deploy troops to victory.</p>
         <ol className="tutorial-steps">
           <li><strong>Click</strong> the resource node to earn loose coins</li>
           <li><strong>Buy upgrades</strong> to increase click power and auto income</li>

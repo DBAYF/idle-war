@@ -1,9 +1,10 @@
 /** Economy formulas and logic */
 
-import type { PlayerEconomy } from './types';
+import type { PlayerEconomy, MatchConfig } from './types';
 import {
   BASE_CLICK_VALUE,
   BASE_SUPPLY_RATE,
+  INITIAL_SUPPLY,
   UPGRADE_DEFINITIONS,
   WIN_THRESHOLD,
 } from './constants';
@@ -46,13 +47,15 @@ export function applyUpgradeEffect(
   }
 }
 
-export function createInitialEconomy(): PlayerEconomy {
+export function createInitialEconomy(config?: Partial<MatchConfig>): PlayerEconomy {
+  const supply = config?.initialSupply ?? INITIAL_SUPPLY;
+  const supplyRate = config?.baseSupplyRate ?? BASE_SUPPLY_RATE;
   return {
     looseCoins: 100,
     securedWealth: 0,
-    supply: 5,
-    supplyRate: BASE_SUPPLY_RATE,
-    coinPerClick: BASE_CLICK_VALUE,
+    supply,
+    supplyRate,
+    coinPerClick: config?.baseClickValue ?? BASE_CLICK_VALUE,
     autoIncomePerSec: 0,
   };
 }
@@ -73,6 +76,7 @@ export function bankCoins(
   };
 }
 
-export function hasReachedWinThreshold(securedWealth: number): boolean {
-  return securedWealth >= WIN_THRESHOLD;
+export function hasReachedWinThreshold(securedWealth: number, config?: { winThreshold?: number } | null): boolean {
+  const threshold = config?.winThreshold ?? WIN_THRESHOLD;
+  return securedWealth >= threshold;
 }

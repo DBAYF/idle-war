@@ -26,8 +26,17 @@ export function WorldViewOverlay() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.25, ease: 'easeOut' }}
+            onClick={toggleWorldView}
           >
-            <div className="world-map">
+            <div className="world-map" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="world-view-close"
+                onClick={toggleWorldView}
+                aria-label="Close world view"
+              >
+                ✕
+              </button>
               {players.map((p, i) => {
                 const n = players.length;
                 const angle = (2 * Math.PI * i) / n - Math.PI / 2;
@@ -46,7 +55,7 @@ export function WorldViewOverlay() {
                     }}
                   >
                     <span>{p.name}</span>
-                    <span>{Math.floor(p.economy.securedWealth)}</span>
+                    <span>{Math.floor(p.economy.securedWealth + p.economy.looseCoins)}</span>
                     {p.isLeader && <span className="leader">★</span>}
                   </div>
                 );

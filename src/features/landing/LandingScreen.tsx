@@ -54,6 +54,7 @@ export function LandingScreen() {
         <p className="landing-subtitle">
           Economy. Pressure. Victory.
         </p>
+        <p className="landing-lore">Compete for wealth in the Coin Realms.</p>
         <p className="landing-offline">Offline vs CPU · Online 1v1 with friends</p>
         <motion.div
           className="landing-actions"

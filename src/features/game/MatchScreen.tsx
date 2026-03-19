@@ -13,11 +13,12 @@ import { DeployBar } from './components/deploy/DeployBar';
 import { BattleLayer } from './components/battle/BattleLayer';
 import { WorldViewOverlay } from './components/overlays/WorldViewOverlay';
 import { MatchPauseOverlay } from './components/overlays/MatchPauseOverlay';
+import { DisconnectOverlay } from './components/overlays/DisconnectOverlay';
+import { DebugHUD } from './components/overlays/DebugHUD';
 import { useScreenShake } from './components/overlays/ScreenShake';
 import { useGameStore } from '../../store/gameStore';
 import { useUIStore } from '../../store/uiStore';
-
-const TICK_MS = 1000 / 60;
+import { TICK_MS } from '../../domain/constants';
 
 export function MatchScreen() {
   const navigate = useNavigate();
@@ -33,9 +34,8 @@ export function MatchScreen() {
     }
 
     const interval = setInterval(() => {
-      const now = Date.now();
-      tick(now);
-      resolveArrivingUnits(now);
+      tick();
+      resolveArrivingUnits();
     }, TICK_MS);
 
     return () => clearInterval(interval);
@@ -66,6 +66,8 @@ export function MatchScreen() {
         ⚙️
       </button>
       <MatchPauseOverlay />
+      <DisconnectOverlay />
+      <DebugHUD />
       <BattleLayer />
       <div className="match-hud">
         <ThreatStrip />

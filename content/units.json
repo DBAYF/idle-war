@@ -1,0 +1,54 @@
+[
+  {
+    "type": "runner",
+    "name": "Runner",
+    "flavour": "Fast raiders that steal loose coins. Low durability.",
+    "speed": 1.5,
+    "durability": 0.3,
+    "coinSteal": 15,
+    "wallDamage": 0,
+    "saboteurDuration": 0,
+    "supplyCost": 3,
+    "coinCost": 20,
+    "cooldownMs": 2000
+  },
+  {
+    "type": "bruiser",
+    "name": "Bruiser",
+    "flavour": "Heavy hitters that damage walls. Slow but durable.",
+    "speed": 0.6,
+    "durability": 1.5,
+    "coinSteal": 5,
+    "wallDamage": 25,
+    "saboteurDuration": 0,
+    "supplyCost": 5,
+    "coinCost": 50,
+    "cooldownMs": 4000
+  },
+  {
+    "type": "saboteur",
+    "name": "Saboteur",
+    "flavour": "Weaken enemy economy. Reduces their click power temporarily.",
+    "speed": 1,
+    "durability": 0.6,
+    "coinSteal": 8,
+    "wallDamage": 0,
+    "saboteurDuration": 5000,
+    "supplyCost": 4,
+    "coinCost": 35,
+    "cooldownMs": 3500
+  },
+  {
+    "type": "defender",
+    "name": "Defender",
+    "flavour": "Shields your realm. Reduces incoming steals for a short time.",
+    "speed": 0,
+    "durability": 2,
+    "coinSteal": 0,
+    "wallDamage": 0,
+    "saboteurDuration": 0,
+    "supplyCost": 3,
+    "coinCost": 40,
+    "cooldownMs": 6000
+  }
+]

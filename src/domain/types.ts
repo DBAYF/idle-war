@@ -7,6 +7,7 @@ export type MatchMode = '1v1' | '2v2' | 'ffa';
 export interface UnitStats {
   type: UnitType;
   name: string;
+  flavour?: string;
   speed: number;
   durability: number;
   coinSteal: number;
@@ -35,6 +36,14 @@ export interface PlayerState {
   wallHealth: number;
   maxWallHealth: number;
   isLeader: boolean;
+  /** Defender shield: reduces incoming steal until this time (simulation time) */
+  defenderShieldUntil?: number;
+  defenderShieldPercent?: number;
+  /** Saboteur debuff: reduces click power until this time (simulation time) */
+  saboteurDebuffUntil?: number;
+  /** Bank shield: reduces incoming steal until this time (simulation time) */
+  bankShieldUntil?: number;
+  bankShieldPercent?: number;
 }
 
 export interface UnitInFlight {
@@ -56,10 +65,17 @@ export interface UpgradeDefinition {
   effectPerLevel: number;
 }
 
+export type AIDifficulty = 'easy' | 'normal' | 'hard' | 'brutal';
+
+export type SupplyScarcity = 'easy' | 'normal' | 'hard';
+
 export interface MatchConfig {
   mode: MatchMode;
   durationSec: number;
   winThreshold: number;
   baseClickValue: number;
   baseSupplyRate: number;
+  supplyCap: number;
+  initialSupply: number;
+  aiDifficulty: AIDifficulty;
 }

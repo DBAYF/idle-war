@@ -5,9 +5,13 @@ import { WIN_THRESHOLD } from '../../../../domain/constants';
 export function ScoreboardStrip() {
   const localPlayerId = useGameStore((s) => s.localPlayerId);
   const players = useGameStore((s) => s.players);
+  const matchConfig = useGameStore((s) => s.matchConfig);
+  const winThreshold = matchConfig?.winThreshold ?? WIN_THRESHOLD;
 
   const sorted = [...players].sort(
-    (a, b) => b.economy.securedWealth - a.economy.securedWealth
+    (a, b) =>
+      b.economy.securedWealth + b.economy.looseCoins -
+      (a.economy.securedWealth + a.economy.looseCoins)
   );
 
   return (
@@ -27,12 +31,14 @@ export function ScoreboardStrip() {
             <motion.div
               className="sb-wealth-fill"
               animate={{
-                width: `${Math.min(100, (p.economy.securedWealth / WIN_THRESHOLD) * 100)}%`,
+                width: `${Math.min(100, (p.economy.securedWealth / winThreshold) * 100)}%`,
               }}
               style={{ backgroundColor: p.color }}
             />
           </div>
-          <span className="sb-value">{Math.floor(p.economy.securedWealth)}</span>
+          <span className="sb-value">
+            {Math.floor(p.economy.securedWealth + p.economy.looseCoins)}
+          </span>
           {p.isLeader && <span className="sb-leader">★</span>}
         </motion.div>
       ))}

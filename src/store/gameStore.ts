@@ -1,7 +1,7 @@
 /** Main game/match state store */
 
 import { create } from 'zustand';
-import type { PlayerState, UnitInFlight, UnitType } from '../domain/types';
+import type { PlayerState, UnitInFlight, UnitType, MatchConfig } from '../domain/types';
 import {
   createInitialEconomy,
   getUpgradeCost,
@@ -9,7 +9,7 @@ import {
   bankCoins,
   hasReachedWinThreshold,
 } from '../domain/economy';
-import { createUnitInFlight } from '../domain/combat';
+import { createUnitInFlight, resolveUnitArrival, updateUnitProgress, getShieldReduction } from '../domain/combat';
 import { getAIAction } from '../domain/ai';
 import {
   UNIT_STATS,
@@ -18,9 +18,16 @@ import {
   MATCH_DURATION_SEC,
   SUPPLY_CAP,
   BASE_SUPPLY_RATE,
+  DEFAULT_MATCH_CONFIG,
+  TICK_MS,
+  DEFENDER_SHIELD_DURATION_MS,
+  DEFENDER_SHIELD_PERCENT,
+  SABOTEUR_DEBUFF_MULTIPLIER,
 } from '../domain/constants';
+import { getPvCpuClickCooldownMs } from '../domain/configHelpers';
 import { audioService } from '../shared/audio/audioService';
 import { broadcastAction, disconnect, type GameAction } from '../shared/network/matchService';
+import { useUIStore } from './uiStore';
 
 export interface UpgradeLevels {
   [upgradeId: string]: number;
@@ -41,46 +48,59 @@ export interface StealFeedback {
 export interface ImpactEvent {
   targetId: string;
   timestamp: number;
+  amount?: number;
 }
 
 export interface GameState {
   isMultiplayer: boolean;
+  peerDisconnected: boolean;
   matchStartTime: number | null;
   matchEndTime: number | null;
+  tickIndex: number;
+  matchConfig: MatchConfig | null;
   players: PlayerState[];
   localPlayerId: string;
   unitsInFlight: UnitInFlight[];
   upgradeLevels: UpgradeLevels;
   selectedTargetId: string | null;
   lastUnitDeployTime: Record<UnitType, number>;
-  lastBotClickTime: number;
+  lastBotClickTime: Record<string, number>;
   lastBotDeployTime: Record<string, number>;
+  lastPlayerClickTime: number;
   matchStats: Record<string, MatchStats>;
   lastStealFeedback: StealFeedback | null;
   recentImpacts: ImpactEvent[];
   attackCountByTarget: Record<string, number>;
+  lastBotActedTick: number | null;
+  lastBotAction: { botId: string; action: string; tickIndex: number } | null;
+  lastRoomId: string | null;
+  wasHost: boolean;
 }
 
 interface GameActions {
-  startMatch: (playerCount?: number) => void;
-  startMultiplayerMatch: (players: PlayerState[], matchStartTime: number, localPlayerIndex: number) => void;
+  startMatch: (playerCount?: number, config?: Partial<MatchConfig>) => void;
+  startMultiplayerMatch: (players: PlayerState[], matchStartTime: number, localPlayerIndex: number, matchConfig?: MatchConfig) => void;
   applyRemoteAction: (action: GameAction) => void;
-  tick: (now: number) => void;
-  clickForCoins: (playerId: string) => void;
+  tick: () => void;
+  clickForCoins: (playerId: string) => boolean;
   buyUpgrade: (playerId: string, upgradeId: string) => boolean;
-  deployUnit: (ownerId: string, targetId: string, type: UnitType) => boolean;
+  deployUnit: (ownerId: string, targetId: string, type: UnitType) => true | 'cooldown' | 'supply' | 'coins';
   bankCoins: (playerId: string, amount: number) => void;
   setSelectedTarget: (targetId: string | null) => void;
-  resolveArrivingUnits: (now: number) => void;
+  resolveArrivingUnits: () => void;
+  setPeerDisconnected: (v: boolean) => void;
+  setLastRoomId: (id: string | null) => void;
+  setWasHost: (v: boolean) => void;
+  clearLastRoom: () => void;
   reset: () => void;
 }
 
-export const createPlayer = (id: string, index: number): PlayerState => ({
+export const createPlayer = (id: string, index: number, config?: Partial<MatchConfig>): PlayerState => ({
   id,
   name: `Player ${index + 1}`,
   teamId: index % 2,
   color: TEAM_COLORS[index % TEAM_COLORS.length],
-  economy: createInitialEconomy(),
+  economy: createInitialEconomy(config),
   wallHealth: BASE_WALL_HEALTH,
   maxWallHealth: BASE_WALL_HEALTH,
   isLeader: false,
@@ -88,8 +108,11 @@ export const createPlayer = (id: string, index: number): PlayerState => ({
 
 const initialState: GameState = {
   isMultiplayer: false,
+  peerDisconnected: false,
   matchStartTime: null,
   matchEndTime: null,
+  tickIndex: 0,
+  matchConfig: null,
   players: [],
   localPlayerId: '',
   unitsInFlight: [],
@@ -101,49 +124,82 @@ const initialState: GameState = {
     saboteur: 0,
     defender: 0,
   },
-  lastBotClickTime: 0,
+  lastBotClickTime: {},
   lastBotDeployTime: {},
+  lastPlayerClickTime: 0,
   matchStats: {},
   lastStealFeedback: null,
   recentImpacts: [],
   attackCountByTarget: {},
+  lastBotActedTick: null,
+  lastBotAction: null,
+  lastRoomId: null,
+  wasHost: false,
 };
 
 export const useGameStore = create<GameState & GameActions>((set, get) => ({
   ...initialState,
 
-  startMatch: (playerCount = 2) => {
+  startMatch: (playerCount = 2, config?: Partial<MatchConfig>) => {
+    const matchConfig: MatchConfig = { ...DEFAULT_MATCH_CONFIG, ...config };
     const players: PlayerState[] = Array.from({ length: playerCount }, (_, i) =>
-      createPlayer(`player-${i}`, i)
+      createPlayer(`player-${i}`, i, matchConfig)
     );
     players[0].name = 'You';
     const matchStats: Record<string, MatchStats> = {};
     players.forEach((p) => {
       matchStats[p.id] = { attacksSent: 0, coinsStolen: 0, coinsLost: 0, biggestSingleSteal: 0 };
     });
+    useUIStore.getState().setLastDeployError(null);
+    useUIStore.getState().setLastDeploySuccess(null);
+    const matchStartTime = Date.now();
+    const localId = 'player-0';
+    const local = players.find((p) => p.id === localId);
+    const firstEnemy =
+      players.find(
+        (p) =>
+          p.id !== localId &&
+          (local?.teamId == null || (p.teamId ?? -1) !== (local.teamId ?? -1))
+      ) ?? players.find((p) => p.id !== localId);
+    const selectedTargetId = firstEnemy?.id ?? (playerCount > 1 ? 'player-1' : null);
     set({
       ...initialState,
       isMultiplayer: false,
-      matchStartTime: Date.now(),
+      matchStartTime,
+      tickIndex: 0,
+      matchConfig,
       players,
-      localPlayerId: 'player-0',
-      selectedTargetId: playerCount > 1 ? 'player-1' : null,
+      localPlayerId: localId,
+      selectedTargetId,
       matchStats,
       attackCountByTarget: {},
     });
   },
 
-  startMultiplayerMatch: (players, matchStartTime, localPlayerIndex) => {
+  startMultiplayerMatch: (players, matchStartTime, localPlayerIndex, matchConfig?: MatchConfig) => {
+    useUIStore.getState().setLastDeployError(null);
+    useUIStore.getState().setLastDeploySuccess(null);
+    const config = matchConfig ?? DEFAULT_MATCH_CONFIG;
     const matchStats: Record<string, MatchStats> = {};
     players.forEach((p) => {
       matchStats[p.id] = { attacksSent: 0, coinsStolen: 0, coinsLost: 0, biggestSingleSteal: 0 };
     });
     const localPlayerId = players[localPlayerIndex]?.id ?? players[0].id;
-    const selectedTargetId = players.find((p) => p.id !== localPlayerId)?.id ?? null;
+    const local = players.find((p) => p.id === localPlayerId);
+    const firstEnemy =
+      players.find(
+        (p) =>
+          p.id !== localPlayerId &&
+          (local?.teamId == null || (p.teamId ?? -1) !== (local.teamId ?? -1))
+      ) ?? players.find((p) => p.id !== localPlayerId);
+    const selectedTargetId = firstEnemy?.id ?? null;
     set({
       ...initialState,
       isMultiplayer: true,
+      peerDisconnected: false,
       matchStartTime,
+      tickIndex: 0,
+      matchConfig: config,
       players,
       localPlayerId,
       selectedTargetId,
@@ -172,13 +228,25 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
         ),
       });
     } else if (action.type === 'bank') {
-      const { players } = get();
+      const { players, matchStartTime, tickIndex, upgradeLevels } = get();
       const player = players.find((p) => p.id === action.playerId);
       if (!player) return;
       const newEconomy = bankCoins(player.economy, action.amount);
+      const simulationTime = matchStartTime ? matchStartTime + tickIndex * TICK_MS : Date.now();
+      const bankShieldLevel = upgradeLevels['bank_shield'] ?? 0;
+      const bankShieldUntil = bankShieldLevel > 0 ? simulationTime + 2000 * (1 + bankShieldLevel * 0.1) : undefined;
+      const bankShieldPercent = bankShieldLevel > 0 ? 0.1 * bankShieldLevel : undefined;
       set({
         players: players.map((p) =>
-          p.id === action.playerId ? { ...p, economy: newEconomy } : p
+          p.id === action.playerId
+            ? {
+                ...p,
+                economy: newEconomy,
+                ...(bankShieldUntil != null && bankShieldPercent != null
+                  ? { bankShieldUntil, bankShieldPercent }
+                  : {}),
+              }
+            : p
         ),
       });
     } else if (action.type === 'upgrade') {
@@ -200,63 +268,91 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
         upgradeLevels: { ...upgradeLevels, [action.upgradeId]: level + 1 },
       });
     } else if (action.type === 'deploy') {
-      const { players, unitsInFlight, lastUnitDeployTime } = get();
+      const { players, unitsInFlight, lastUnitDeployTime, matchStartTime, tickIndex } = get();
       const owner = players.find((p) => p.id === action.ownerId);
       const stats = UNIT_STATS[action.unitType as UnitType];
-      if (!owner || !stats) return;
-      const now = Date.now();
+      if (!owner || !stats || !matchStartTime) return;
+      const simulationTime = matchStartTime + tickIndex * TICK_MS;
       const cooldown = lastUnitDeployTime[action.unitType as UnitType] ?? 0;
-      if (now - cooldown < stats.cooldownMs) return;
+      if (simulationTime - cooldown < stats.cooldownMs) return;
       if (owner.economy.supply < stats.supplyCost) return;
       if (owner.economy.looseCoins < stats.coinCost) return;
-      const unit = createUnitInFlight(
-        action.unitType as UnitType,
-        action.ownerId,
-        action.targetId,
-        now
-      );
-      const { matchStats, attackCountByTarget } = get();
-      const ownerStats = matchStats[action.ownerId] ?? { attacksSent: 0, coinsStolen: 0, coinsLost: 0 };
-      const key = `${action.ownerId}-${action.targetId}`;
-      const count = (attackCountByTarget[key] ?? 0) + 1;
       const newEconomy = {
         ...owner.economy,
         supply: owner.economy.supply - stats.supplyCost,
         looseCoins: owner.economy.looseCoins - stats.coinCost,
       };
-      set({
-        players: players.map((p) =>
-          p.id === action.ownerId ? { ...p, economy: newEconomy } : p
-        ),
-        unitsInFlight: [...unitsInFlight, unit],
-        lastUnitDeployTime: {
-          ...lastUnitDeployTime,
-          [action.unitType as UnitType]: now,
-        },
-        matchStats: {
-          ...matchStats,
-          [action.ownerId]: { ...ownerStats, attacksSent: ownerStats.attacksSent + 1 },
-        },
-        attackCountByTarget: { ...attackCountByTarget, [key]: count },
-      });
+      if (action.unitType === 'defender') {
+        const shieldUntil = simulationTime + DEFENDER_SHIELD_DURATION_MS;
+        set({
+          players: players.map((p) =>
+            p.id === action.ownerId
+              ? {
+                  ...p,
+                  economy: newEconomy,
+                  defenderShieldUntil: shieldUntil,
+                  defenderShieldPercent: DEFENDER_SHIELD_PERCENT,
+                }
+              : p
+          ),
+          lastUnitDeployTime: {
+            ...lastUnitDeployTime,
+            [action.unitType as UnitType]: simulationTime,
+          },
+        });
+      } else {
+        const unit = createUnitInFlight(
+          action.unitType as UnitType,
+          action.ownerId,
+          action.targetId,
+          simulationTime
+        );
+        const { matchStats, attackCountByTarget } = get();
+        const ownerStats = matchStats[action.ownerId] ?? { attacksSent: 0, coinsStolen: 0, coinsLost: 0 };
+        const key = `${action.ownerId}-${action.targetId}`;
+        const count = (attackCountByTarget[key] ?? 0) + 1;
+        set({
+          players: players.map((p) =>
+            p.id === action.ownerId ? { ...p, economy: newEconomy } : p
+          ),
+          unitsInFlight: [...unitsInFlight, unit],
+          lastUnitDeployTime: {
+            ...lastUnitDeployTime,
+            [action.unitType as UnitType]: simulationTime,
+          },
+          matchStats: {
+            ...matchStats,
+            [action.ownerId]: { ...ownerStats, attacksSent: ownerStats.attacksSent + 1 },
+          },
+          attackCountByTarget: { ...attackCountByTarget, [key]: count },
+        });
+      }
     }
   },
 
-  tick: (now: number) => {
-    const { matchStartTime, matchEndTime, players, localPlayerId, upgradeLevels, lastBotClickTime, lastBotDeployTime } = get();
+  tick: () => {
+    const { matchStartTime, matchEndTime, matchConfig, players, localPlayerId, upgradeLevels, lastBotClickTime, lastBotDeployTime, tickIndex } = get();
     if (!matchStartTime || matchEndTime) return;
 
-    const elapsed = (now - matchStartTime) / 1000;
-    if (elapsed >= MATCH_DURATION_SEC) {
-      set({ matchEndTime: now });
+    const newTickIndex = tickIndex + 1;
+    const simulationTime = matchStartTime + newTickIndex * TICK_MS;
+
+    const durationSec = matchConfig?.durationSec ?? MATCH_DURATION_SEC;
+    const supplyCap = matchConfig?.supplyCap ?? SUPPLY_CAP;
+    const baseSupplyRate = matchConfig?.baseSupplyRate ?? BASE_SUPPLY_RATE;
+    const aiDifficulty = matchConfig?.aiDifficulty ?? 'normal';
+
+    const elapsed = (simulationTime - matchStartTime) / 1000;
+    if (elapsed >= durationSec) {
+      set({ matchEndTime: simulationTime, tickIndex: newTickIndex });
       return;
     }
 
     const winner = players.find((p) =>
-      hasReachedWinThreshold(p.economy.securedWealth)
+      hasReachedWinThreshold(p.economy.securedWealth, matchConfig)
     );
     if (winner) {
-      set({ matchEndTime: now });
+      set({ matchEndTime: simulationTime, tickIndex: newTickIndex });
       return;
     }
 
@@ -266,9 +362,13 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     let updatedPlayers = players.map((p) => {
       const economy = { ...p.economy };
       economy.autoIncomePerSec = economy.autoIncomePerSec || 0;
-      economy.supplyRate = economy.supplyRate ?? BASE_SUPPLY_RATE;
-      economy.looseCoins += economy.autoIncomePerSec / 60;
-      economy.supply = Math.min(SUPPLY_CAP, economy.supply + economy.supplyRate / 60);
+      economy.supplyRate = economy.supplyRate ?? baseSupplyRate;
+      const saboteurMult =
+        p.saboteurDebuffUntil != null && simulationTime < p.saboteurDebuffUntil
+          ? SABOTEUR_DEBUFF_MULTIPLIER
+          : 1;
+      economy.looseCoins += (economy.autoIncomePerSec / 60) * saboteurMult;
+      economy.supply = Math.min(supplyCap, economy.supply + economy.supplyRate / 60);
       return {
         ...p,
         economy,
@@ -277,38 +377,42 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     });
 
     const { unitsInFlight } = get();
-    const updatedUnits = unitsInFlight.map((u) => ({
-      ...u,
-      progress: Math.min(
-        1,
-        u.progress + (1000 / 60 / 3000) * (UNIT_STATS[u.type]?.speed ?? 1)
-      ),
-    }));
+    const updatedUnits = unitsInFlight.map((u) =>
+      updateUnitProgress(u, simulationTime)
+    );
 
-    let newLastBotClickTime = lastBotClickTime;
+    let newLastBotClickTime = { ...lastBotClickTime };
     let newLastBotDeployTime = { ...lastBotDeployTime };
     let newUpgradeLevels = { ...upgradeLevels };
     let newUnitsInFlight = [...updatedUnits];
 
     const isMultiplayer = get().isMultiplayer;
     const bots = isMultiplayer ? [] : updatedPlayers.filter((p) => p.id !== localPlayerId);
-    let aiActed = false;
+    let botActedThisTick = false;
+    let lastBotActionThisTick: { botId: string; action: string; tickIndex: number } | null = null;
     for (const bot of bots) {
-      if (aiActed) break;
       const enemies = updatedPlayers.filter((p) => p.id !== bot.id);
       const action = getAIAction(
         bot,
         enemies,
         newUpgradeLevels,
-        newLastBotClickTime,
-        now,
-        newLastBotDeployTime[bot.id] ?? 0
+        newLastBotClickTime[bot.id] ?? 0,
+        simulationTime,
+        newLastBotDeployTime[bot.id] ?? 0,
+        aiDifficulty,
+        newUnitsInFlight,
+        supplyCap
       );
       if (action === 'bank') {
+        botActedThisTick = true;
+        lastBotActionThisTick = { botId: bot.id, action: 'bank', tickIndex: newTickIndex };
         const idx = updatedPlayers.findIndex((p) => p.id === bot.id);
         if (idx >= 0 && updatedPlayers[idx].economy.looseCoins > 0) {
           const b = updatedPlayers[idx];
           const toBank = Math.floor(b.economy.looseCoins);
+          const bankShieldLevel = newUpgradeLevels['bank_shield'] ?? 0;
+          const bankShieldUntil = bankShieldLevel > 0 ? simulationTime + 2000 * (1 + bankShieldLevel * 0.1) : undefined;
+          const bankShieldPercent = bankShieldLevel > 0 ? 0.1 * bankShieldLevel : undefined;
           updatedPlayers = [...updatedPlayers];
           updatedPlayers[idx] = {
             ...b,
@@ -317,25 +421,32 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
               looseCoins: 0,
               securedWealth: b.economy.securedWealth + toBank,
             },
+            ...(bankShieldUntil != null && bankShieldPercent != null ? { bankShieldUntil, bankShieldPercent } : {}),
           };
-          aiActed = true;
         }
       } else if (action === 'click') {
+        botActedThisTick = true;
+        lastBotActionThisTick = { botId: bot.id, action: 'click', tickIndex: newTickIndex };
         const idx = updatedPlayers.findIndex((p) => p.id === bot.id);
         if (idx >= 0) {
           const b = updatedPlayers[idx];
+          const saboteurMult =
+            b.saboteurDebuffUntil != null && simulationTime < b.saboteurDebuffUntil
+              ? SABOTEUR_DEBUFF_MULTIPLIER
+              : 1;
           updatedPlayers = [...updatedPlayers];
           updatedPlayers[idx] = {
             ...b,
             economy: {
               ...b.economy,
-              looseCoins: b.economy.looseCoins + b.economy.coinPerClick,
+              looseCoins: b.economy.looseCoins + b.economy.coinPerClick * saboteurMult,
             },
           };
-          newLastBotClickTime = now;
-          aiActed = true;
+          newLastBotClickTime = { ...newLastBotClickTime, [bot.id]: simulationTime };
         }
       } else if (action && 'upgrade' in action) {
+        botActedThisTick = true;
+        lastBotActionThisTick = { botId: bot.id, action: `upgrade:${action.upgrade}`, tickIndex: newTickIndex };
         const level = newUpgradeLevels[action.upgrade] ?? 0;
         const cost = getUpgradeCost(action.upgrade, level);
         const idx = updatedPlayers.findIndex((p) => p.id === bot.id);
@@ -349,9 +460,10 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
           updatedPlayers = [...updatedPlayers];
           updatedPlayers[idx] = { ...b, economy: newEco };
           newUpgradeLevels = { ...newUpgradeLevels, [action.upgrade]: level + 1 };
-          aiActed = true;
         }
       } else if (action && 'deploy' in action) {
+        botActedThisTick = true;
+        lastBotActionThisTick = { botId: bot.id, action: `deploy:${action.deploy.type}`, tickIndex: newTickIndex };
         const stats = UNIT_STATS[action.deploy.type];
         const idx = updatedPlayers.findIndex((p) => p.id === bot.id);
         if (
@@ -370,12 +482,20 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
               looseCoins: b.economy.looseCoins - stats.coinCost,
             },
           };
-          newUnitsInFlight = [
-            ...newUnitsInFlight,
-            createUnitInFlight(action.deploy.type, bot.id, action.deploy.targetId, now),
-          ];
-          newLastBotDeployTime = { ...newLastBotDeployTime, [bot.id]: now };
-          aiActed = true;
+          if (action.deploy.type === 'defender') {
+            const shieldUntil = simulationTime + DEFENDER_SHIELD_DURATION_MS;
+            updatedPlayers[idx] = {
+              ...updatedPlayers[idx],
+              defenderShieldUntil: shieldUntil,
+              defenderShieldPercent: DEFENDER_SHIELD_PERCENT,
+            };
+          } else {
+            newUnitsInFlight = [
+              ...newUnitsInFlight,
+              createUnitInFlight(action.deploy.type, bot.id, action.deploy.targetId, simulationTime),
+            ];
+          }
+          newLastBotDeployTime = { ...newLastBotDeployTime, [bot.id]: simulationTime };
         }
       }
     }
@@ -386,17 +506,31 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       upgradeLevels: newUpgradeLevels,
       lastBotClickTime: newLastBotClickTime,
       lastBotDeployTime: newLastBotDeployTime,
+      tickIndex: newTickIndex,
+      lastBotActedTick: botActedThisTick ? newTickIndex : get().lastBotActedTick,
+      lastBotAction: lastBotActionThisTick ?? get().lastBotAction,
     });
   },
 
   clickForCoins: (playerId: string) => {
-    const { players, localPlayerId, isMultiplayer } = get();
+    const { players, localPlayerId, isMultiplayer, matchStartTime, tickIndex, lastPlayerClickTime, matchConfig } = get();
     const player = players.find((p) => p.id === playerId);
-    if (!player) return;
+    if (!player) return false;
+    const simulationTime = matchStartTime ? matchStartTime + tickIndex * TICK_MS : Date.now();
+
+    if (!isMultiplayer && playerId === localPlayerId) {
+      const cooldown = getPvCpuClickCooldownMs(matchConfig?.aiDifficulty ?? 'normal');
+      if (simulationTime - lastPlayerClickTime < cooldown) return false;
+    }
+
+    const saboteurMult =
+      player.saboteurDebuffUntil != null && simulationTime < player.saboteurDebuffUntil
+        ? SABOTEUR_DEBUFF_MULTIPLIER
+        : 1;
     const maxWealth = Math.max(...players.map((p) => p.economy.securedWealth));
     const isBehind = player.economy.securedWealth < maxWealth * 0.6 && maxWealth > 100;
     const catchUpBonus = isBehind && playerId === localPlayerId ? 1.1 : 1;
-    const gain = player.economy.coinPerClick * catchUpBonus;
+    const gain = player.economy.coinPerClick * saboteurMult * catchUpBonus;
     const newEconomy = {
       ...player.economy,
       looseCoins: player.economy.looseCoins + gain,
@@ -405,10 +539,12 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       players: players.map((p) =>
         p.id === playerId ? { ...p, economy: newEconomy } : p
       ),
+      ...(!isMultiplayer && playerId === localPlayerId ? { lastPlayerClickTime: simulationTime, lastBotActedTick: null } : {}),
     });
     if (isMultiplayer && playerId === localPlayerId) {
       broadcastAction({ type: 'click', playerId, senderId: localPlayerId });
     }
+    return true;
   },
 
   buyUpgrade: (playerId: string, upgradeId: string) => {
@@ -434,6 +570,7 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
         p.id === playerId ? { ...p, economy: newEconomyWithEffect } : p
       ),
       upgradeLevels: { ...upgradeLevels, [upgradeId]: level + 1 },
+      ...(playerId === get().localPlayerId ? { lastBotActedTick: null } : {}),
     });
     if (get().isMultiplayer && playerId === get().localPlayerId) {
       broadcastAction({ type: 'upgrade', playerId, upgradeId, senderId: get().localPlayerId });
@@ -441,17 +578,17 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     return true;
   },
 
-  deployUnit: (ownerId: string, targetId: string, type: UnitType) => {
-    const { players, unitsInFlight, lastUnitDeployTime } = get();
+  deployUnit: (ownerId: string, targetId: string, type: UnitType): true | 'cooldown' | 'supply' | 'coins' => {
+    const { players, unitsInFlight, lastUnitDeployTime, matchStartTime, tickIndex } = get();
     const owner = players.find((p) => p.id === ownerId);
     const stats = UNIT_STATS[type];
-    if (!owner || !stats) return false;
+    if (!owner || !stats || !matchStartTime) return 'coins';
 
-    const now = Date.now();
+    const simulationTime = matchStartTime + tickIndex * TICK_MS;
     const cooldown = lastUnitDeployTime[type] ?? 0;
-    if (now - cooldown < stats.cooldownMs) return false;
-    if (owner.economy.supply < stats.supplyCost) return false;
-    if (owner.economy.looseCoins < stats.coinCost) return false;
+    if (simulationTime - cooldown < stats.cooldownMs) return 'cooldown';
+    if (owner.economy.supply < stats.supplyCost) return 'supply';
+    if (owner.economy.looseCoins < stats.coinCost) return 'coins';
 
     const newEconomy = {
       ...owner.economy,
@@ -459,7 +596,38 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       looseCoins: owner.economy.looseCoins - stats.coinCost,
     };
 
-    const unit = createUnitInFlight(type, ownerId, targetId, now);
+    if (type === 'defender') {
+      const shieldUntil = simulationTime + DEFENDER_SHIELD_DURATION_MS;
+      set({
+        players: players.map((p) =>
+          p.id === ownerId
+            ? {
+                ...p,
+                economy: newEconomy,
+                defenderShieldUntil: shieldUntil,
+                defenderShieldPercent: DEFENDER_SHIELD_PERCENT,
+              }
+            : p
+        ),
+        lastUnitDeployTime: {
+          ...lastUnitDeployTime,
+          [type]: simulationTime,
+        },
+        ...(ownerId === get().localPlayerId ? { lastBotActedTick: null } : {}),
+      });
+      if (get().isMultiplayer && ownerId === get().localPlayerId) {
+        broadcastAction({
+          type: 'deploy',
+          ownerId,
+          targetId: ownerId,
+          unitType: type,
+          senderId: get().localPlayerId,
+        });
+      }
+      return true;
+    }
+
+    const unit = createUnitInFlight(type, ownerId, targetId, simulationTime);
     const { matchStats, attackCountByTarget } = get();
     const ownerStats = matchStats[ownerId] ?? { attacksSent: 0, coinsStolen: 0, coinsLost: 0 };
     const key = `${ownerId}-${targetId}`;
@@ -472,13 +640,14 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       unitsInFlight: [...unitsInFlight, unit],
       lastUnitDeployTime: {
         ...lastUnitDeployTime,
-        [type]: now,
+        [type]: simulationTime,
       },
       matchStats: {
         ...matchStats,
         [ownerId]: { ...ownerStats, attacksSent: ownerStats.attacksSent + 1 },
       },
       attackCountByTarget: { ...attackCountByTarget, [key]: count },
+      ...(ownerId === get().localPlayerId ? { lastBotActedTick: null } : {}),
     });
     if (get().isMultiplayer && ownerId === get().localPlayerId) {
       broadcastAction({
@@ -493,14 +662,27 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
   },
 
   bankCoins: (playerId: string, amount: number) => {
-    const { players, localPlayerId, isMultiplayer } = get();
+    const { players, localPlayerId, isMultiplayer, matchStartTime, tickIndex, upgradeLevels } = get();
     const player = players.find((p) => p.id === playerId);
     if (!player) return;
     const newEconomy = bankCoins(player.economy, amount);
+    const simulationTime = matchStartTime ? matchStartTime + tickIndex * TICK_MS : Date.now();
+    const bankShieldLevel = upgradeLevels['bank_shield'] ?? 0;
+    const bankShieldUntil = bankShieldLevel > 0 ? simulationTime + 2000 * (1 + bankShieldLevel * 0.1) : undefined;
+    const bankShieldPercent = bankShieldLevel > 0 ? 0.1 * bankShieldLevel : undefined;
     set({
       players: players.map((p) =>
-        p.id === playerId ? { ...p, economy: newEconomy } : p
+        p.id === playerId
+          ? {
+              ...p,
+              economy: newEconomy,
+              ...(bankShieldUntil != null && bankShieldPercent != null
+                ? { bankShieldUntil, bankShieldPercent }
+                : {}),
+            }
+          : p
       ),
+      ...(playerId === localPlayerId ? { lastBotActedTick: null } : {}),
     });
     if (isMultiplayer && playerId === localPlayerId) {
       broadcastAction({ type: 'bank', playerId, amount, senderId: localPlayerId });
@@ -511,39 +693,62 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     set({ selectedTargetId: targetId });
   },
 
-  resolveArrivingUnits: (_now: number) => {
-    const { unitsInFlight, players, matchStats, localPlayerId, attackCountByTarget } = get();
+  setPeerDisconnected: (v: boolean) => {
+    set({ peerDisconnected: v });
+  },
+
+  resolveArrivingUnits: () => {
+    const { unitsInFlight, players, matchStats, localPlayerId, attackCountByTarget, matchStartTime, tickIndex } = get();
     const arriving = unitsInFlight.filter((u) => u.progress >= 1);
     if (arriving.length === 0) return;
 
+    const simulationTime = matchStartTime ? matchStartTime + tickIndex * TICK_MS : 0;
     const maxWealth = Math.max(...players.map((p) => p.economy.securedWealth));
     const leaderId = players.find((p) => p.economy.securedWealth === maxWealth && maxWealth > 0)?.id;
 
     let newPlayers = [...players];
     let newStats = { ...matchStats };
     let totalStolenByLocal = 0;
+    const stealByTarget: Record<string, number> = {};
 
     for (const u of arriving) {
       const target = newPlayers.find((p) => p.id === u.targetId);
       const stats = UNIT_STATS[u.type];
       if (!target || !stats) continue;
 
-      let stealAmount = Math.min(stats.coinSteal, target.economy.looseCoins);
-      if (u.targetId === leaderId && stealAmount > 0) {
-        stealAmount = Math.min(target.economy.looseCoins, Math.ceil(stealAmount * 1.1));
-      }
       const attackKey = `${u.ownerId}-${u.targetId}`;
       const attackCount = attackCountByTarget[attackKey] ?? 1;
-      if (attackCount > 3) {
-        stealAmount = Math.floor(stealAmount * Math.max(0.5, 1 - (attackCount - 3) * 0.1));
+      const isLeaderTarget = u.targetId === leaderId;
+      let { stealAmount, wallDamage } = resolveUnitArrival(
+        stats,
+        target.economy.looseCoins,
+        attackCount,
+        isLeaderTarget
+      );
+
+      const shieldReduction = getShieldReduction(
+        target.defenderShieldPercent,
+        target.defenderShieldUntil,
+        target.bankShieldPercent,
+        target.bankShieldUntil,
+        simulationTime
+      );
+      if (shieldReduction > 0) {
+        stealAmount = Math.floor(stealAmount * (1 - shieldReduction));
       }
-      const wallDamage = stats.wallDamage;
+      stealAmount = Math.min(stealAmount, target.economy.looseCoins);
+
+      const saboteurDebuffUntil =
+        u.type === 'saboteur' && stats.saboteurDuration > 0
+          ? simulationTime + stats.saboteurDuration
+          : undefined;
 
       const targetStats = newStats[u.targetId] ?? { attacksSent: 0, coinsStolen: 0, coinsLost: 0, biggestSingleSteal: 0 };
       const ownerStats = newStats[u.ownerId] ?? { attacksSent: 0, coinsStolen: 0, coinsLost: 0, biggestSingleSteal: 0 };
 
       const newOwnerBiggest = Math.max(ownerStats.biggestSingleSteal ?? 0, stealAmount);
 
+      stealByTarget[u.targetId] = (stealByTarget[u.targetId] ?? 0) + stealAmount;
       if (u.ownerId === localPlayerId && stealAmount > 0) totalStolenByLocal += stealAmount;
       if (u.targetId === localPlayerId) audioService.playImpact();
       if (u.ownerId === localPlayerId && stealAmount > 0) audioService.playStolenCoin();
@@ -556,14 +761,17 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
 
       newPlayers = newPlayers.map((p) => {
         if (p.id === u.targetId) {
-          return {
-            ...p,
+          const updates: Partial<PlayerState> = {
             economy: {
               ...p.economy,
               looseCoins: Math.max(0, p.economy.looseCoins - stealAmount),
             },
             wallHealth: Math.max(0, p.wallHealth - wallDamage),
           };
+          if (saboteurDebuffUntil != null) {
+            updates.saboteurDebuffUntil = saboteurDebuffUntil;
+          }
+          return { ...p, ...updates };
         }
         if (p.id === u.ownerId && stealAmount > 0) {
           return {
@@ -578,12 +786,12 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
       });
     }
 
-    const stealFeedback: StealFeedback | null =
-      totalStolenByLocal > 0 ? { amount: totalStolenByLocal, timestamp: Date.now() } : null;
-
     const now = Date.now();
+    const stealFeedback: StealFeedback | null =
+      totalStolenByLocal > 0 ? { amount: totalStolenByLocal, timestamp: now } : null;
+
     const newImpacts: ImpactEvent[] = [...new Set(arriving.map((u) => u.targetId))].map(
-      (targetId) => ({ targetId, timestamp: now })
+      (targetId) => ({ targetId, timestamp: now, amount: stealByTarget[targetId] ?? 0 })
     );
 
     set({
@@ -595,9 +803,15 @@ export const useGameStore = create<GameState & GameActions>((set, get) => ({
     });
   },
 
+  setLastRoomId: (id) => set({ lastRoomId: id }),
+  setWasHost: (v) => set({ wasHost: v }),
+  clearLastRoom: () => set({ lastRoomId: null, wasHost: false }),
+
   reset: () => {
     const { isMultiplayer } = get();
     if (isMultiplayer) disconnect();
-    set({ ...initialState, isMultiplayer: false });
+    useUIStore.getState().setLastDeployError(null);
+    useUIStore.getState().setLastDeploySuccess(null);
+    set({ ...initialState, isMultiplayer: false, lastRoomId: null, wasHost: false });
   },
 }));

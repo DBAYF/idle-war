@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useGameStore } from '../../store/gameStore';
 import { hasReachedWinThreshold } from '../../domain/economy';
-import { WIN_THRESHOLD } from '../../domain/constants';
+import { WIN_THRESHOLD, TICK_MS } from '../../domain/constants';
 import { audioService } from '../../shared/audio/audioService';
 
 export function MatchEndScreen() {
@@ -11,9 +11,16 @@ export function MatchEndScreen() {
   const players = useGameStore((s) => s.players);
   const localPlayerId = useGameStore((s) => s.localPlayerId);
   const matchStats = useGameStore((s) => s.matchStats);
+  const matchConfig = useGameStore((s) => s.matchConfig);
+  const tickIndex = useGameStore((s) => s.tickIndex);
+  const isMultiplayer = useGameStore((s) => s.isMultiplayer);
+  const lastRoomId = useGameStore((s) => s.lastRoomId);
   const reset = useGameStore((s) => s.reset);
+  const clearLastRoom = useGameStore((s) => s.clearLastRoom);
+  const primaryButtonRef = useRef<HTMLButtonElement>(null);
 
-  const winner = players.find((p) => hasReachedWinThreshold(p.economy.securedWealth));
+  const winThreshold = matchConfig?.winThreshold ?? WIN_THRESHOLD;
+  const winner = players.find((p) => hasReachedWinThreshold(p.economy.securedWealth, matchConfig));
   const sortedByWealth = [...players].sort(
     (a, b) => b.economy.securedWealth - a.economy.securedWealth
   );
@@ -27,12 +34,35 @@ export function MatchEndScreen() {
     }
   }, [winner, isLocalWinner]);
 
+  useEffect(() => {
+    primaryButtonRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (import.meta.env.DEV && players.length > 0) {
+      const totalDeploys = Object.values(matchStats).reduce((s, st) => s + (st?.attacksSent ?? 0), 0);
+      const elapsedSec = Math.round((tickIndex * TICK_MS) / 1000);
+      const cpuDeploys = players
+        .filter((p) => p.id !== localPlayerId)
+        .reduce((s, p) => s + (matchStats[p.id]?.attacksSent ?? 0), 0);
+      console.log('[MatchEnd]', {
+        mode: isMultiplayer ? 'PvP' : 'PvCPU',
+        elapsedSec,
+        totalDeploys,
+        cpuDeploys,
+        perPlayer: Object.fromEntries(
+          players.map((p) => [p.name, matchStats[p.id]?.attacksSent ?? 0])
+        ),
+      });
+    }
+  }, [players, matchStats, localPlayerId, tickIndex, isMultiplayer]);
+
   const handleRematch = () => {
-    reset();
-    navigate('/lobby', { replace: true });
+    navigate(lastRoomId ? `/room/${lastRoomId}` : '/room', { replace: true });
   };
 
   const handleLobby = () => {
+    clearLastRoom();
     reset();
     navigate('/lobby', { replace: true });
   };
@@ -53,6 +83,11 @@ export function MatchEndScreen() {
         >
           {winner ? (isLocalWinner ? 'VICTORY' : 'DEFEAT') : 'TIME UP'}
         </motion.h1>
+        {winner && (
+          <p className="match-end-lore">
+            {isLocalWinner ? 'Your realm secured victory.' : 'The rival realm prevailed.'}
+          </p>
+        )}
         <motion.div
           className="match-stats-summary"
           initial={{ opacity: 0 }}
@@ -88,7 +123,7 @@ export function MatchEndScreen() {
         )}
         <div className="wealth-chart">
           {sortedByWealth.map((p, i) => {
-            const pct = Math.min(100, (p.economy.securedWealth / WIN_THRESHOLD) * 100);
+            const pct = Math.min(100, (p.economy.securedWealth / winThreshold) * 100);
             return (
               <div key={p.id} className="wealth-bar-row">
                 <span className="wb-name">{p.name}</span>
@@ -130,22 +165,40 @@ export function MatchEndScreen() {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.6 }}
         >
-          <motion.button
-            className="btn-primary"
-            onClick={handleRematch}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            REMATCH
-          </motion.button>
-          <motion.button
-            className="btn-secondary"
-            onClick={handleLobby}
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            LOBBY
-          </motion.button>
+          {isMultiplayer ? (
+            <>
+              <motion.button
+                ref={primaryButtonRef}
+                className="btn-primary"
+                onClick={handleRematch}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.98 }}
+                aria-label="Rematch with same opponent"
+              >
+                REMATCH
+              </motion.button>
+              <motion.button
+                className="btn-secondary"
+                onClick={handleLobby}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                aria-label="Back to lobby"
+              >
+                LOBBY
+              </motion.button>
+            </>
+          ) : (
+            <motion.button
+              ref={primaryButtonRef}
+              className="btn-primary"
+              onClick={handleLobby}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.98 }}
+              aria-label="Back to lobby"
+            >
+              LOBBY
+            </motion.button>
+          )}
         </motion.div>
       </div>
     </motion.div>

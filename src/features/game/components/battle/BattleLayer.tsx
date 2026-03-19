@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Application, Graphics } from 'pixi.js';
+import { Application, Graphics, Text } from 'pixi.js';
 import { useGameStore } from '../../../../store/gameStore';
 
 const IMPACT_DISPLAY_MS = 500;
@@ -12,6 +12,7 @@ export function BattleLayer() {
   const players = useGameStore((s) => s.players);
   const unitsInFlight = useGameStore((s) => s.unitsInFlight);
   const recentImpacts = useGameStore((s) => s.recentImpacts);
+  const selectedTargetId = useGameStore((s) => s.selectedTargetId);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -88,6 +89,12 @@ export function BattleLayer() {
       const pos = getRadialPos(i);
       const color = parseInt(p.color.replace('#', ''), 16);
       drawWall(pos.x, pos.y, color, p.wallHealth, p.maxWallHealth);
+      if (selectedTargetId === p.id) {
+        const ring = new Graphics();
+        ring.circle(pos.x, pos.y, 55)
+          .stroke({ color: 0x00d4aa, width: 3, alpha: 0.7 });
+        app.stage.addChild(ring);
+      }
     });
 
     unitsInFlight.forEach((u) => {
@@ -127,8 +134,19 @@ export function BattleLayer() {
         burst.circle(x, y, radius).fill({ color: 0xff6600, alpha: alpha * 0.4 });
         burst.circle(x, y, radius).stroke({ color: 0xffaa00, width: 2, alpha: alpha * 0.6 });
         app.stage.addChild(burst);
+        if (impact.amount != null && impact.amount > 0) {
+          const label = new Text({
+            text: `+${impact.amount}`,
+            style: { fontSize: 14, fill: 0xffdd00, fontWeight: 'bold' },
+          });
+          label.anchor.set(0.5, 1);
+          label.x = x;
+          label.y = y - radius - 4;
+          label.alpha = alpha;
+          app.stage.addChild(label);
+        }
       });
-  }, [players, unitsInFlight, recentImpacts, appReady]);
+  }, [players, unitsInFlight, recentImpacts, selectedTargetId, appReady]);
 
   return <div ref={containerRef} className="battle-layer" />;
 }

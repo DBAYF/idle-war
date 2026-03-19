@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useGameStore } from '../../store/gameStore';
+import { getQuickPlayConfig, getPlayerCount } from '../../domain/configHelpers';
 
 interface QueueScreenProps {
   mode: '1v1' | '2v2' | 'ffa';
@@ -12,9 +13,10 @@ export function QueueScreen({ mode }: QueueScreenProps) {
   const startMatch = useGameStore((s) => s.startMatch);
 
   useEffect(() => {
-    const playerCount = mode === '1v1' ? 2 : mode === '2v2' ? 4 : 4;
+    const playerCount = getPlayerCount(mode);
+    const config = getQuickPlayConfig(mode);
     const timer = setTimeout(() => {
-      startMatch(playerCount);
+      startMatch(playerCount, config);
       navigate('/match');
     }, 2000);
     return () => clearTimeout(timer);

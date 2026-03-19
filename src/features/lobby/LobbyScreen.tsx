@@ -82,6 +82,15 @@ export function LobbyScreen() {
             <span className="mode-title">FFA</span>
             <span className="mode-desc">You vs 3 CPU</span>
           </motion.button>
+          <motion.button
+            className="mode-card"
+            onClick={() => navigate('/custom')}
+            whileHover={{ scale: 1.03, y: -4 }}
+            whileTap={{ scale: 0.98 }}
+          >
+            <span className="mode-title">Custom</span>
+            <span className="mode-desc">Set your own rules</span>
+          </motion.button>
         </motion.div>
       </div>
     </motion.div>

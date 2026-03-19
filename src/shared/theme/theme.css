@@ -26,16 +26,32 @@
   box-sizing: border-box;
 }
 
+/* Prevent accidental text selection during gameplay */
+.match-screen,
+.match-screen * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.match-screen input,
+.match-screen button {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 body {
   margin: 0;
   background: var(--bg-dark);
   color: var(--text-primary);
   font-family: var(--font-body);
   overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 #root {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
 }

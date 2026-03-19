@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { LandingScreen } from './features/landing/LandingScreen';
 import { LobbyScreen } from './features/lobby/LobbyScreen';
+import { CustomGameSetup } from './features/lobby/CustomGameSetup';
 import { RoomLobbyScreen } from './features/lobby/RoomLobbyScreen';
 import { MatchScreen } from './features/game/MatchScreen';
 import { MatchEndScreen } from './features/game/MatchEndScreen';
@@ -15,6 +16,7 @@ function App() {
         <Routes>
           <Route path="/" element={<LandingScreen />} />
           <Route path="/lobby" element={<LobbyScreen />} />
+          <Route path="/custom" element={<CustomGameSetup />} />
           <Route path="/room" element={<RoomLobbyScreen />} />
           <Route path="/room/:roomId" element={<RoomLobbyScreen />} />
           <Route path="/match" element={<MatchScreen />} />

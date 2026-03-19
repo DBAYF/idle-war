@@ -1,9 +1,11 @@
 /** P2P multiplayer via PeerJS */
 
 import Peer from 'peerjs';
+import type { MatchConfig } from '../../domain/types';
 
 export type GameAction =
-  | { type: 'start'; matchStartTime: number; players: unknown[]; localPlayerIndex: number; senderId: string }
+  | { type: 'start'; matchStartTime: number; players: unknown[]; localPlayerIndex: number; senderId: string; matchConfig?: MatchConfig }
+  | { type: 'configSync'; matchConfig: MatchConfig; senderId: string }
   | { type: 'click'; playerId: string; senderId: string }
   | { type: 'bank'; playerId: string; amount: number; senderId: string }
   | { type: 'upgrade'; playerId: string; upgradeId: string; senderId: string }
@@ -48,6 +50,9 @@ function setupConnection(conn: { open: boolean; send: (d: unknown) => void; clos
   conn.on('data', (data: unknown) => {
     const action = parseAction(data);
     if (action?.type && callbacks) {
+      if (import.meta.env.DEV) {
+        console.log('[net] recv', action.type, new Date().toISOString());
+      }
       callbacks.onAction(action);
       if (isHostMode) relayToAll(data);
     }
@@ -115,6 +120,9 @@ export function joinRoom(
 }
 
 export function broadcastAction(action: GameAction): void {
+  if (import.meta.env.DEV) {
+    console.log('[net] send', action.type, new Date().toISOString());
+  }
   const msg = JSON.stringify(action);
   connections.forEach((conn) => {
     if (conn.open) conn.send(msg);
@@ -127,6 +135,11 @@ export function getConnections(): { open: boolean; send: (d: unknown) => void; c
 
 export function isHost(): boolean {
   return peer !== null && connections.length > 0;
+}
+
+/** Re-register callbacks when re-entering room (e.g. after Rematch) without creating/joining again. */
+export function setCallbacks(cbs: MatchServiceCallbacks | null): void {
+  callbacks = cbs;
 }
 
 export function disconnect(): void {
