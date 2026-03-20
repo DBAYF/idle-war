@@ -86,8 +86,9 @@ export function getAIAction(
 
   if (deployThrottleElapsed && canAffordDeployMin && enemies.length > 0) {
     const enemyLeader = enemies.find((e) => e.isLeader);
-    const weAreBehind =
-      enemyLeader && bot.economy.securedWealth < enemyLeader.economy.securedWealth - 100;
+    const weAreBehind = Boolean(
+      enemyLeader && bot.economy.securedWealth < enemyLeader.economy.securedWealth - 100
+    );
     const timeFactor = Math.min(1.2, timeSinceDeploy / Math.max(1, deployThrottleMs));
 
     if (

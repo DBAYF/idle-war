@@ -61,15 +61,12 @@ export function ResourceClickField() {
     }
   };
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    applyClick(e.clientX);
-  };
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     pointerDownRef.current = true;
     pointerClientXRef.current = e.clientX;
     e.preventDefault();
   };
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  const onPointerUp = (_e: React.PointerEvent<HTMLDivElement>) => {
     if (pointerDownRef.current) {
       applyClick(pointerClientXRef.current);
       firedFromPointerRef.current = true;

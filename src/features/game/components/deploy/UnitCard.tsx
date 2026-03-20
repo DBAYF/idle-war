@@ -84,7 +84,7 @@ export function UnitCard({ type }: UnitCardProps) {
     pointerDownRef.current = true;
     e.preventDefault();
   };
-  const onPointerUp = (e: React.PointerEvent) => {
+  const onPointerUp = (_e: React.PointerEvent) => {
     if (pointerDownRef.current && canDeploy && !isDebounceLocked) {
       handleDeploy();
       firedFromPointerRef.current = true;
@@ -97,7 +97,7 @@ export function UnitCard({ type }: UnitCardProps) {
   const onPointerCancel = () => {
     pointerDownRef.current = false;
   };
-  const onClickFallback = (e: React.MouseEvent) => {
+  const onClickFallback = (_e: React.MouseEvent) => {
     if (!firedFromPointerRef.current) handleDeploy();
   };
 

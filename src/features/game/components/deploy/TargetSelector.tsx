@@ -33,7 +33,7 @@ export function TargetSelector() {
     pointerDownTargetIdRef.current = id;
     e.preventDefault();
   };
-  const onPointerUp = (id: string) => (e: React.PointerEvent) => {
+  const onPointerUp = (id: string) => (_e: React.PointerEvent) => {
     if (pointerDownTargetIdRef.current === id) {
       selectTarget(id);
       firedFromPointerRef.current = true;
@@ -46,7 +46,7 @@ export function TargetSelector() {
   const onPointerCancel = () => {
     pointerDownTargetIdRef.current = null;
   };
-  const onClickFallback = (id: string) => (e: React.MouseEvent) => {
+  const onClickFallback = (id: string) => (_e: React.MouseEvent) => {
     if (!firedFromPointerRef.current) selectTarget(id);
   };
 

@@ -1,5 +1,12 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
+
+/** Vite `base` (e.g. subpath deploy). Root is `/` → no basename. */
+function routerBasename(): string | undefined {
+  const base = import.meta.env.BASE_URL;
+  if (base === '/' || base === '') return undefined;
+  return base.replace(/\/$/, '') || undefined;
+}
 import { LandingScreen } from './features/landing/LandingScreen';
 import { LobbyScreen } from './features/lobby/LobbyScreen';
 import { CustomGameSetup } from './features/lobby/CustomGameSetup';
@@ -11,7 +18,7 @@ import './App.css';
 
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename()}>
       <AnimatePresence mode="wait">
         <Routes>
           <Route path="/" element={<LandingScreen />} />

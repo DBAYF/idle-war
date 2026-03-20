@@ -35,7 +35,9 @@ export function RoomLobbyScreen() {
   const configSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostConfigRef = useRef<MatchConfig>(hostConfig);
   const joinerRoomIdRef = useRef('');
-  hostConfigRef.current = hostConfig;
+  useEffect(() => {
+    hostConfigRef.current = hostConfig;
+  }, [hostConfig]);
 
   const startMultiplayerMatch = useGameStore((s) => s.startMultiplayerMatch);
   const setLastRoomId = useGameStore((s) => s.setLastRoomId);
@@ -248,7 +250,8 @@ export function RoomLobbyScreen() {
       setError('Copy failed; please copy the code manually.');
     }
   };
-  const copyLink = () => copyToClipboard(`${window.location.origin}/#/room/${roomId}`, 'link');
+  const copyLink = () =>
+    copyToClipboard(`${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/room/${roomId}`, 'link');
   const copyCode = () => copyToClipboard(roomId, 'code');
 
   if (roomState === 'create' || roomState === 'join') {
